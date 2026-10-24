@@ -65,15 +65,16 @@ jobs:
           curl -fsSL "$URL" -o /tmp/jniLibs.zip
           rm -rf /tmp/jni && mkdir -p /tmp/jni
           unzip -q /tmp/jniLibs.zip -d /tmp/jni
-          # 兼容两种压缩包结构：内含 arm64-v8a/ 目录，或直接是 .so 文件
-          if [ -d /tmp/jni/arm64-v8a ]; then
-            mkdir -p app/src/main/jniLibs
-            cp -r /tmp/jni/arm64-v8a app/src/main/jniLibs/
-          else
-            mkdir -p app/src/main/jniLibs/arm64-v8a
-            cp /tmp/jni/*.so app/src/main/jniLibs/arm64-v8a/
+          # 兼容任意打包结构（jniLibs/arm64-v8a/、arm64-v8a/、散装 .so）：
+          # 递归找出全部 .so（本项目仅发布 arm64-v8a 库）复制到目标目录
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          find /tmp/jni -type f -name '*.so' -exec cp -t app/src/main/jniLibs/arm64-v8a/ {} +
+          COUNT=$(ls app/src/main/jniLibs/arm64-v8a | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::jniLibs.zip 中未找到任何 .so 文件"
+            exit 1
           fi
-          echo "已就位 $(ls app/src/main/jniLibs/arm64-v8a | wc -l) 个预编译库"
+          echo "已就位 $COUNT 个预编译库"
           ls app/src/main/jniLibs/arm64-v8a | head -5
 
       # 自签证书由 repo Secrets 提供，保证各版本签名一致：可直接覆盖安装升级
