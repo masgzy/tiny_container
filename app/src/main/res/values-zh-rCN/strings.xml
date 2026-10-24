@@ -153,7 +153,7 @@
     <string name="tc4_experimental_folder_name">实验性功能</string>
     <string name="tc4_experimental_folder_desc">分支自带的实验性功能，可能不稳定或随时变动。</string>
     <string name="tc4_experimental_systema_name">支持 systema（实验性）</string>
-    <string name="tc4_experimental_systema_desc">开启后，容器启动时会在容器内尝试自动拉起 systema（systemd 兼容层，通过 D-Bus 提供 systemd 接口），使 systemctl 等 systemd 工具可用。需要先在容器内自行安装 systema。修改后需重启容器生效。实验性功能，可能不稳定。</string>
+    <string name="tc4_experimental_systema_desc">开启后，容器启动时会在容器内尝试自动拉起 systema（systemd 兼容层，通过 D-Bus 提供 systemd 接口），使 systemctl 等 systemd 工具可用。可直接下载预编译版：https://github.com/masgzy/tiny_container/releases（systema-v0.1.0 标签）。修改后需重启容器生效。实验性功能，可能不稳定。</string>
 
     <!-- ==================== Validation ==================== -->
     <string name="tc4_validate_name_empty">名称不能为空</string>
