@@ -26,6 +26,9 @@ app/release/
 # Signing keys
 *.jks
 *.keystore
+# CI 签名配置（由 workflow 从 Secrets 生成，见 .github/workflows/）
+keystore.properties
+signing/
 
 # Logs
 *.log

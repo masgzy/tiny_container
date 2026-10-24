@@ -1,0 +1,114 @@
+name: CI
+
+# push 到 main 或 PR 时构建 release APK，验证项目可编译、可签名。
+# - 使用正式签名（Secrets 证书）；PR 来自 fork 时 Secrets 不可用，
+#   自动回退为未签名 APK，流程不会失败。
+# - 预编译库 jniLibs.zip 优先取本仓库最新正式 release，缺失时回退上游
+#   Cateners/tiny_container。
+# - 构建不含容器 rootfs（上游未发布独立的 rootfs.tar.zst 资产，
+#   如需内嵌容器请本地将 rootfs.tar.zst 放入 app/src/main/assets/ 后自行构建）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 构建签名 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      # 对应 gradle-daemon-jvm.properties 的 toolchainVersion=21
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Gradle 依赖缓存 + Gradle Wrapper 完整性校验
+      - name: Gradle 缓存
+        uses: gradle/actions/setup-gradle@v6
+
+      # AGP 会按需自动下载 compileSdk 37 的 platform/build-tools 与默认版本 NDK，
+      # 预先接受全部 licenses 以免交互卡住
+      - name: 接受 Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      # README 构建要求：预编译库（busybox/proot/tar/zstd 等）解压到
+      # app/src/main/jniLibs/arm64-v8a，否则打出的 APK 缺少运行时依赖
+      - name: 下载并解压预编译库 jniLibs.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pick() {
+            gh api "repos/$1/releases?per_page=10" \
+              --jq '[.[] | select(.prerelease == false) | .assets[] | select(.name == "jniLibs.zip") | .browser_download_url][0] // empty'
+          }
+          URL=$(pick "${GITHUB_REPOSITORY}")
+          if [ -z "$URL" ]; then URL=$(pick "Cateners/tiny_container"); fi
+          if [ -z "$URL" ]; then
+            echo "::error::未能找到 jniLibs.zip 资产"
+            exit 1
+          fi
+          echo "jniLibs.zip 来源：$URL"
+          curl -fsSL "$URL" -o /tmp/jniLibs.zip
+          rm -rf /tmp/jni && mkdir -p /tmp/jni
+          unzip -q /tmp/jniLibs.zip -d /tmp/jni
+          # 兼容两种压缩包结构：内含 arm64-v8a/ 目录，或直接是 .so 文件
+          if [ -d /tmp/jni/arm64-v8a ]; then
+            mkdir -p app/src/main/jniLibs
+            cp -r /tmp/jni/arm64-v8a app/src/main/jniLibs/
+          else
+            mkdir -p app/src/main/jniLibs/arm64-v8a
+            cp /tmp/jni/*.so app/src/main/jniLibs/arm64-v8a/
+          fi
+          echo "已就位 $(ls app/src/main/jniLibs/arm64-v8a | wc -l) 个预编译库"
+          ls app/src/main/jniLibs/arm64-v8a | head -5
+
+      # 自签证书由 repo Secrets 提供，保证各版本签名一致：可直接覆盖安装升级
+      - name: 恢复签名证书（Secrets -> keystore.properties）
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 KEYSTORE_BASE64 等 Secrets（fork PR 场景），产出未签名 APK"
+            exit 0
+          fi
+          mkdir -p signing
+          echo "$KEYSTORE_BASE64" | base64 --decode > signing/tiny-container.jks
+          # 用 echo 逐行生成而非 heredoc：heredoc 会继承 YAML 缩进，
+          # 前导空格会被 java.util.Properties 当作续行处理
+          {
+            echo "storeFile=signing/tiny-container.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > keystore.properties
+          echo "keystore.properties 已生成，证书指纹："
+          keytool -list -v -keystore signing/tiny-container.jks \
+            -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | grep SHA256 || true
+
+      - name: 构建 APK 并运行单元测试
+        run: ./gradlew :app:assembleRelease :app:testReleaseUnitTest --no-daemon
+
+      - name: 上传 APK 构件
+        uses: actions/upload-artifact@v7
+        with:
+          name: tiny-container-apk
+          path: app/build/outputs/apk/release/*.apk
+          archive: false
+          if-no-files-found: error

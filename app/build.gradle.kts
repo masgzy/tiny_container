@@ -15,6 +15,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see http://www.gnu.org/licenses/.
 
+import java.util.Properties
+
+// 可选的 release 签名配置：仓库根目录存在 keystore.properties 时启用
+// （CI 从 Secrets 生成，格式见 .github/workflows/release.yml；
+//  本地无此文件时不影响正常构建，产出未签名 APK）
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 plugins {
     alias(libs.plugins.android.application)
 }
@@ -37,6 +47,17 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystoreProperties.isNotEmpty()) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -44,6 +65,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (keystoreProperties.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     buildFeatures {
