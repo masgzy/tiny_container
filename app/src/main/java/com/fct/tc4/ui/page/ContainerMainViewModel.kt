@@ -634,21 +634,46 @@ class ContainerMainViewModel(
      * （如 proot 容器）中继续工作。
      *
      * 行为（均为尽力而为，不阻断容器启动）：
-     *  1. 若系统总线未运行且容器内有 dbus-daemon，则先拉起系统总线
-     *     （systema 的 D-Bus 服务依赖它）；
-     *  2. 依次在 PATH、/usr/local/bin、/usr/bin 中查找 systema-sysi；
-     *  3. 找到则后台启动（日志写入 /var/log/systema.log），
-     *     否则打印未安装提示。
+     *  1. 依次在 PATH、/usr/local/bin、/usr/bin 中查找 systema-sysi 与
+     *     systema-sysw.systemd；未安装时仅打印提示，不改动容器系统状态
+     *     （避免影响正常启动流程）；
+     *  2. 找到则先创建 /run/systemd/system——systemd 257+ 的 systemctl
+     *     只有在该目录存在时才认为系统已启动（sd_booted），否则即便
+     *     D-Bus 总线可用也会直接拒绝执行；
+     *  3. 确保 machine-id 存在（dbus-daemon --system 缺它无法启动，
+     *     同时同步 /etc/machine-id 供 systemd 工具读取）；
+     *  4. 若系统总线未运行且容器内有 dbus-daemon，则拉起系统总线，
+     *     并等待总线套接字就绪（最多约 3 秒）再启动 systema，
+     *     避免 systema 抢在总线之前启动而无法注册服务；
+     *  5. 后台启动 systema-sysi（日志写入 /var/log/systema.log）——它会
+     *     拉起控制面 systema-sysa 并创建 /run/systema/control.socket；
+     *  6. 额外显式启动 systema-sysw.systemd（在总线上认领
+     *     org.freedesktop.systemd1 并响应 systemctl 的 D-Bus 桥接进程）。
+     *     实测 sysi 只会按需拉起 worker（且开机时可能因 notify 竞态停住），
+     *     不显式启动它 systemctl 就会因 systemd1 无人认领而走 D-Bus
+     *     activation，在 proot 下必然失败（setuid 助手不可用）。
+     *     sysw 自带重连逻辑，若 sysa 尚未就绪会自动重试。
      */
     private fun buildSystemaStartCommand(): String = listOf(
-        "if command -v dbus-daemon >/dev/null 2>&1 && [ ! -S /run/dbus/system_bus_socket ]; then " +
-            "mkdir -p /run/dbus && (dbus-daemon --system --fork >/dev/null 2>&1 || true); fi",
         "sa=\$(command -v systema-sysi 2>/dev/null || true)",
         "[ -z \"\$sa\" ] && [ -x /usr/local/bin/systema-sysi ] && sa=/usr/local/bin/systema-sysi",
         "[ -z \"\$sa\" ] && [ -x /usr/bin/systema-sysi ] && sa=/usr/bin/systema-sysi",
+        "sw=\$(command -v systema-sysw.systemd 2>/dev/null || true)",
+        "[ -z \"\$sw\" ] && [ -x /usr/local/bin/systema-sysw.systemd ] && sw=/usr/local/bin/systema-sysw.systemd",
+        "[ -z \"\$sw\" ] && [ -x /usr/bin/systema-sysw.systemd ] && sw=/usr/bin/systema-sysw.systemd",
         "if [ -n \"\$sa\" ]; then " +
-            "mkdir -p /run/systema /var/log/systema && nohup \"\$sa\" >/var/log/systema.log 2>&1 & " +
+            "mkdir -p /run/systemd/system /run/dbus /run/systema /var/log/systema; " +
+            "[ -s /etc/machine-id ] || { dbus-uuidgen --ensure >/dev/null 2>&1; " +
+            "[ -s /var/lib/dbus/machine-id ] && cat /var/lib/dbus/machine-id >/etc/machine-id; } 2>/dev/null || true; " +
+            "if command -v dbus-daemon >/dev/null 2>&1 && [ ! -S /run/dbus/system_bus_socket ]; then " +
+            "(dbus-daemon --system --fork >/dev/null 2>&1 || true); fi; " +
+            "i=0; while [ ! -S /run/dbus/system_bus_socket ] && [ \$i -lt 10 ]; do sleep 0.3; i=\$((i+1)); done; " +
+            "[ -S /run/dbus/system_bus_socket ] || echo \"[tiny] warning: system bus unavailable, systema may not work\"; " +
+            "nohup \"\$sa\" >/var/log/systema.log 2>&1 & " +
             "echo \"[tiny] systema started: \$sa\"; " +
+            "if [ -n \"\$sw\" ]; then sleep 1; nohup \"\$sw\" >>/var/log/systema.log 2>&1 & " +
+            "echo \"[tiny] systema systemd1 bridge started: \$sw\"; " +
+            "else echo \"[tiny] warning: systema-sysw.systemd not found, systemctl will not work\"; fi; " +
             "else echo \"[tiny] systema-sysi not found; install systema first (experimental feature)\"; fi"
     ).joinToString("; ")
 
