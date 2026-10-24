@@ -398,7 +398,7 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
             } ?: emptyList()
         }
 
-        val breadcrumbs = generateBreadcrumbs().apply {
+        val breadcrumbs = generateBreadcrumbs().toMutableList().apply {
             if (inPowerMenu) {
                 add(BreadcrumbChip(app.getString(R.string.tc4_power_menu_title), level = currentPath.size))
             }

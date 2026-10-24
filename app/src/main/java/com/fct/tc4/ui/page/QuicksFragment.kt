@@ -39,6 +39,7 @@ import com.fct.tc4.databinding.Tc4FragmentQuicksBinding
 import com.fct.tc4.databinding.Tc4QuickCommandItemBinding
 import com.fct.tc4.databinding.Tc4QuickFolderItemBinding
 import com.fct.tc4.databinding.Tc4QuickOptionItemBinding
+import com.fct.tc4.databinding.Tc4QuickPowerItemBinding
 import com.fct.tc4.ui.main.MainViewModel
 import com.fct.tc4.ui.misc.ConfirmDialogFragment
 import com.fct.tc4.ui.misc.Global
