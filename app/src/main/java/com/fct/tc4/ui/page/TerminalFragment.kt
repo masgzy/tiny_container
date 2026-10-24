@@ -61,6 +61,12 @@ class TerminalFragment : Fragment() {
 
         binding.terminalView.setTextSize(Global.terminalFontSize)
         binding.terminalView.attachSession(Global.terminalSession)
+        // 启用词组输入法兼容模式：terminal-lib 默认 inputType 含 TYPE_TEXT_VARIATION_VISIBLE_PASSWORD，
+        // 会被多数 CJK 输入法当作密码框处理（强制拉丁布局，MIUI 上还会进入安全输入模式），
+        // 导致中文候选词与"确定"上屏的原始字母无法经 commitText/finishComposingText 转发进容器。
+        // 切换为 TYPE_CLASS_TEXT | TYPE_TEXT_FLAG_NO_SUGGESTIONS 后 IME 可正常组合输入，
+        // 文本经 InputConnection → sendTextToTerminal → writeCodePoint 写入 PTY。
+        binding.terminalView.setEnableWordBasedIme(true)
 
         // 比较 surface 和 surfaceInverse，选更暗的作背景
         fun colorLuma(c: Int): Int {
