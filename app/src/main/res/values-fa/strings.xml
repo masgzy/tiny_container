@@ -262,6 +262,10 @@
     <string name="tc4_menu_file_permission">درخواست دسترسی به فایل</string>
     <string name="tc4_menu_battery_optimization">غیرفعال کردن بهینه‌سازی باتری</string>
     <string name="tc4_menu_shortcuts">میانبرها</string>
+    <string name="tc4_experimental_folder_name">Experimental Features</string>
+    <string name="tc4_experimental_folder_desc">Fork-specific experimental features. They may be unstable or change at any time.</string>
+    <string name="tc4_experimental_systema_name">Support systema (experimental)</string>
+    <string name="tc4_experimental_systema_desc">When enabled, the app tries to auto-start systema (a systemd-compatible D-Bus shim) inside the container after it boots, so that systemd tools like systemctl can work. systema must be installed in the container first. Takes effect after the container is restarted. Experimental; may be unstable.</string>
 
 
 </resources>

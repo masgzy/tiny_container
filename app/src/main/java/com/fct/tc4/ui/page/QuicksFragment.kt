@@ -149,13 +149,17 @@ class QuicksFragment : Fragment() {
                 // 因此这里按 item 内容在当前列表中查找，而不是按位置取值
                 if (item !is QuicksNodeItem.PowerFolderItem &&
                     item !is QuicksNodeItem.PowerActionItem &&
+                    item !is QuicksNodeItem.ExperimentalFolderItem &&
+                    item !is QuicksNodeItem.ExperimentalToggleItem &&
                     item !in viewModel.displayState.value.nodes
                 ) return
 
                 // 选择模式下点击 = 切换选中（内置电源项不参与多选）
                 if (viewModel.selectedIndices.value.isNotEmpty()) {
                     if (item !is QuicksNodeItem.PowerFolderItem &&
-                        item !is QuicksNodeItem.PowerActionItem
+                        item !is QuicksNodeItem.PowerActionItem &&
+                        item !is QuicksNodeItem.ExperimentalFolderItem &&
+                        item !is QuicksNodeItem.ExperimentalToggleItem
                     ) {
                         viewModel.toggleSelection(index)
                     }
@@ -164,6 +168,8 @@ class QuicksFragment : Fragment() {
                 when (item) {
                     is QuicksNodeItem.PowerFolderItem -> viewModel.enterPowerMenu()
                     is QuicksNodeItem.PowerActionItem -> handlePowerAction(item.action)
+                    is QuicksNodeItem.ExperimentalFolderItem -> viewModel.enterExperimentalMenu()
+                    is QuicksNodeItem.ExperimentalToggleItem -> viewModel.toggleExperimentalFeature(item.key)
                     is QuicksNodeItem.CommandItem -> {
                         if (item.command.isNotBlank()) {
                             Global.sendCommand(item.command)
@@ -184,7 +190,9 @@ class QuicksFragment : Fragment() {
 
             override fun onItemLongClick(index: Int, item: QuicksNodeItem) {
                 if (item is QuicksNodeItem.PowerFolderItem ||
-                    item is QuicksNodeItem.PowerActionItem
+                    item is QuicksNodeItem.PowerActionItem ||
+                    item is QuicksNodeItem.ExperimentalFolderItem ||
+                    item is QuicksNodeItem.ExperimentalToggleItem
                 ) return
                 viewModel.toggleSelection(index)
             }
@@ -551,6 +559,7 @@ private class QuicksNodesAdapter(
         private const val TYPE_FOLDER = 1
         private const val TYPE_OPTION = 2
         private const val TYPE_POWER_ACTION = 3
+        private const val TYPE_EXPERIMENTAL_TOGGLE = 4
 
         private val DIFF_CALLBACK = object : DiffUtil.ItemCallback<QuicksNodeItem>() {
             override fun areItemsTheSame(old: QuicksNodeItem, new: QuicksNodeItem) =
@@ -564,9 +573,11 @@ private class QuicksNodesAdapter(
         is QuicksNodeItem.CommandItem -> TYPE_COMMAND
         is QuicksNodeItem.PowerFolderItem -> TYPE_FOLDER
         is QuicksNodeItem.CommandsFolderItem -> TYPE_FOLDER
+        is QuicksNodeItem.ExperimentalFolderItem -> TYPE_FOLDER
         is QuicksNodeItem.OptionItem -> TYPE_OPTION
         is QuicksNodeItem.OptionsFolderItem -> TYPE_FOLDER
         is QuicksNodeItem.PowerActionItem -> TYPE_POWER_ACTION
+        is QuicksNodeItem.ExperimentalToggleItem -> TYPE_EXPERIMENTAL_TOGGLE
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
@@ -588,6 +599,10 @@ private class QuicksNodesAdapter(
                 val b = Tc4QuickPowerItemBinding.inflate(inflater, parent, false)
                 PowerActionVH(b, callbacks)
             }
+            TYPE_EXPERIMENTAL_TOGGLE -> {
+                val b = Tc4QuickOptionItemBinding.inflate(inflater, parent, false)
+                ExperimentalToggleVH(b, callbacks)
+            }
             else -> error("unknown view type: $viewType")
         }
     }
@@ -600,6 +615,7 @@ private class QuicksNodesAdapter(
             is FolderVH -> holder.bind(item, position, count)
             is OptionVH -> holder.bind(item as QuicksNodeItem.OptionItem, position, count)
             is PowerActionVH -> holder.bind(item as QuicksNodeItem.PowerActionItem, position, count)
+            is ExperimentalToggleVH -> holder.bind(item as QuicksNodeItem.ExperimentalToggleItem, position, count)
         }
     }
 }
@@ -674,6 +690,35 @@ private class PowerActionVH(
         binding.description.text = item.description.trim()
         binding.description.visibility = if (item.description.isEmpty()) View.GONE else View.VISIBLE
         itemView.setOnClickListener { callbacks.onItemClick(item.index, item) }
+    }
+}
+
+/** 「实验性功能」二级菜单中的开关项（复用选项条目布局） */
+private class ExperimentalToggleVH(
+    private val binding: Tc4QuickOptionItemBinding,
+    private val callbacks: QuicksNodeCallbacks
+) : ListItemViewHolder(binding.root) {
+
+    fun bind(item: QuicksNodeItem.ExperimentalToggleItem, position: Int, itemCount: Int) {
+        super.bind(position, itemCount)
+        binding.name.text = item.name
+        binding.description.text = item.description.trim()
+        binding.description.visibility = if (item.description.isEmpty()) View.GONE else View.VISIBLE
+        binding.enabled.setOnCheckedChangeListener(null)
+        binding.enabled.isChecked = item.enabled
+        binding.enabled.setOnCheckedChangeListener { _, _ ->
+            callbacks.onItemClick(item.index, item)
+        }
+        binding.itemCard.setCardBackgroundColor(
+            MaterialColors.getColor(
+                itemView.context, com.google.android.material.R.attr.colorSurfaceContainerHigh, 0
+            )
+        )
+        itemView.setOnClickListener {
+            callbacks.onItemClick(item.index, item)
+        }
+        // 虚拟节点不参与多选，长按无操作
+        itemView.setOnLongClickListener { true }
     }
 }
 

@@ -64,8 +64,11 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
     /** 是否处于内置「重启 / 关机」二级菜单 */
     private var inPowerMenu = false
 
+    /** 是否处于内置「实验性功能」二级菜单 */
+    private var inExperimentalMenu = false
+
     val pathDepth: Int
-        get() = currentPath.size + (if (inPowerMenu) 1 else 0)
+        get() = currentPath.size + (if (inPowerMenu || inExperimentalMenu) 1 else 0)
 
     // ===================== UI 状态（合并为单次发射） =====================
 
@@ -116,6 +119,7 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
         if (_currentTab.value == tab) return
         _currentTab.value = tab
         inPowerMenu = false
+        inExperimentalMenu = false
         _selectedIndices.value = emptySet()
         refresh()
     }
@@ -137,6 +141,57 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
         refresh()
     }
 
+    /** 进入内置「实验性功能」二级菜单（仅限选项 tab 根层级） */
+    fun enterExperimentalMenu() {
+        if (inExperimentalMenu || inPowerMenu || currentPath.isNotEmpty()) return
+        if (_currentTab.value != Tab.OPTIONS) return
+        _selectedIndices.value = emptySet()
+        inExperimentalMenu = true
+        refresh()
+    }
+
+    /** 退出内置「实验性功能」二级菜单 */
+    fun exitExperimentalMenu() {
+        if (!inExperimentalMenu) return
+        inExperimentalMenu = false
+        refresh()
+    }
+
+    // ===================== 内置实验性功能 =====================
+
+    /** 内置实验性功能开关状态（持久化在 config["experimental"] 下） */
+    fun isExperimentalFeatureEnabled(key: String): Boolean {
+        @Suppress("UNCHECKED_CAST")
+        val experimental = configRef?.get("experimental") as? Map<String, Any> ?: return false
+        return experimental[key] as? Boolean == true
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun setExperimentalFeatureEnabled(key: String, enabled: Boolean) {
+        val experimental = (configRef?.get("experimental") as? MutableMap<String, Any>)
+            ?: mutableMapOf<String, Any>().also { configRef?.put("experimental", it) }
+        experimental[key] = enabled
+        save()
+    }
+
+    /** 切换内置实验性功能开关 */
+    fun toggleExperimentalFeature(key: String) {
+        setExperimentalFeatureEnabled(key, !isExperimentalFeatureEnabled(key))
+    }
+
+    /** 当前内置实验性功能对应的开关项列表 */
+    private fun experimentalFeatureItems(app: Application): List<QuicksNodeItem.ExperimentalToggleItem> {
+        return listOf(
+            QuicksNodeItem.ExperimentalToggleItem(
+                index = 0,
+                key = ExperimentalFeatures.SYSTEMA,
+                name = app.getString(R.string.tc4_experimental_systema_name),
+                description = app.getString(R.string.tc4_experimental_systema_desc),
+                enabled = isExperimentalFeatureEnabled(ExperimentalFeatures.SYSTEMA)
+            )
+        )
+    }
+
     // ===================== 导航 =====================
 
     fun navigateTo(index: Int) {
@@ -149,6 +204,7 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
         // level -1 = root, level 0 = first folder, level 1 = second folder
         // targetSize = level + 1
         inPowerMenu = false
+        inExperimentalMenu = false
         val targetSize = level + 1
         while (currentPath.size > targetSize) {
             currentPath.removeAt(currentPath.lastIndex)
@@ -355,6 +411,8 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
                     description = app.getString(R.string.tc4_power_shutdown_desc)
                 )
             )
+        } else if (inExperimentalMenu) {
+            experimentalFeatureItems(app)
         } else {
             val items = list?.let { lst ->
                 val count = lst.size
@@ -399,7 +457,7 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
             // 内置「重启 / 关机」入口：仅命令 tab 根层级展示，以虚拟节点形式
             // 插在第 3 位（前两个条目之后），不持久化到 config；
             // 各真实节点仍携带配置列表中的原始 index，点击/多选均按下标操作
-            if (_currentTab.value == Tab.COMMANDS && currentPath.isEmpty() && items.isNotEmpty()) {
+            val withPowerEntry = if (_currentTab.value == Tab.COMMANDS && currentPath.isEmpty() && items.isNotEmpty()) {
                 items.toMutableList().apply {
                     add(
                         minOf(2, size),
@@ -412,17 +470,32 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 items
             }
+            // 内置「实验性功能」文件夹：仅选项 tab 根层级展示，追加到列表末尾，
+            // 不持久化到 config；即使配置无 options 键也展示，保证入口可见
+            if (_currentTab.value == Tab.OPTIONS && currentPath.isEmpty()) {
+                withPowerEntry + QuicksNodeItem.ExperimentalFolderItem(
+                    name = app.getString(R.string.tc4_experimental_folder_name),
+                    description = app.getString(R.string.tc4_experimental_folder_desc)
+                )
+            } else {
+                withPowerEntry
+            }
         }
 
         val breadcrumbs = generateBreadcrumbs().toMutableList().apply {
             if (inPowerMenu) {
                 add(BreadcrumbChip(app.getString(R.string.tc4_power_menu_title), level = currentPath.size))
             }
+            if (inExperimentalMenu) {
+                add(BreadcrumbChip(app.getString(R.string.tc4_experimental_folder_name), level = currentPath.size))
+            }
         }
 
         val (headerTitle, headerDesc) = when {
             inPowerMenu ->
                 app.getString(R.string.tc4_power_menu_title) to app.getString(R.string.tc4_power_menu_desc)
+            inExperimentalMenu ->
+                app.getString(R.string.tc4_experimental_folder_name) to app.getString(R.string.tc4_experimental_folder_desc)
             currentPath.isEmpty() ->
                 if (_currentTab.value == Tab.COMMANDS)
                     app.getString(R.string.tc4_quick_commands_tab) to app.getString(R.string.tc4_quick_commands_default_desc)
@@ -440,7 +513,8 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
             breadcrumbs = breadcrumbs,
             headerTitle = headerTitle,
             headerDesc = headerDesc,
-            isPowerMenu = inPowerMenu
+            isPowerMenu = inPowerMenu,
+            isExperimentalMenu = inExperimentalMenu
         )
     }
 
@@ -490,7 +564,9 @@ data class QuickDisplayState(
     val headerTitle: String = "",
     val headerDesc: String = "",
     /** 是否处于内置「重启 / 关机」二级菜单 */
-    val isPowerMenu: Boolean = false
+    val isPowerMenu: Boolean = false,
+    /** 是否处于内置「实验性功能」二级菜单 */
+    val isExperimentalMenu: Boolean = false
 )
 
 sealed class QuicksNodeItem {
@@ -520,6 +596,32 @@ sealed class QuicksNodeItem {
         val action: QuicksViewModel.PowerAction,
         override val name: String,
         override val description: String
+    ) : QuicksNodeItem() {
+        override val isSelected = false
+        override val totalCount = 0
+    }
+
+    /**
+     * 内置「实验性功能」入口（仅展示，不持久化到 config，
+     * 由 refresh() 以虚拟节点形式追加在选项 tab 根列表末尾，
+     * 不占用配置索引，避免与多选/删除/编辑的下标逻辑相互干扰）
+     */
+    data class ExperimentalFolderItem(
+        override val name: String,
+        override val description: String
+    ) : QuicksNodeItem() {
+        override val index = -1
+        override val isSelected = false
+        override val totalCount = 0
+    }
+
+    /** 「实验性功能」二级菜单中的开关项（状态持久化在 config["experimental"] 下） */
+    data class ExperimentalToggleItem(
+        override val index: Int,
+        val key: String,
+        override val name: String,
+        override val description: String,
+        val enabled: Boolean
     ) : QuicksNodeItem() {
         override val isSelected = false
         override val totalCount = 0
@@ -566,3 +668,8 @@ data class BreadcrumbChip(
     val label: String,
     val level: Int  // -1 = 根, 0..n = 第几层
 )
+
+/** 内置实验性功能在 config["experimental"] 下的键名 */
+object ExperimentalFeatures {
+    const val SYSTEMA = "systema"
+}

@@ -282,6 +282,11 @@ class ContainerMainViewModel(
             Global.sendCommand(cmd)
         }
 
+        // 实验性功能：systema（systemd 兼容层）支持，在容器内拉起
+        if (isExperimentalFeatureEnabled(ExperimentalFeatures.SYSTEMA)) {
+            Global.sendCommand(buildSystemaStartCommand())
+        }
+
         launchEnabledFeature()
     }
 
@@ -612,6 +617,40 @@ class ContainerMainViewModel(
         val portRegex = Regex(":(\\d+)(?:/|$)")
         return portRegex.find(link)?.groupValues?.get(1)?.toIntOrNull()
     }
+
+    /** 读取内置实验性功能开关状态（持久化在 config["experimental"] 下） */
+    private fun isExperimentalFeatureEnabled(key: String): Boolean {
+        @Suppress("UNCHECKED_CAST")
+        val experimental = config["experimental"] as? Map<String, Any> ?: return false
+        return experimental[key] as? Boolean == true
+    }
+
+    /**
+     * 构建容器启动后在容器内拉起 systema 的命令。
+     *
+     * systema（https://github.com/system-alphabet/systema）是一个非 pid1 的
+     * systemd 兼容层，通过 D-Bus 提供 org.freedesktop.systemd1 接口，
+     * 使 systemctl 等 systemd 前端工具在无法运行真正 systemd 的环境
+     * （如 proot 容器）中继续工作。
+     *
+     * 行为（均为尽力而为，不阻断容器启动）：
+     *  1. 若系统总线未运行且容器内有 dbus-daemon，则先拉起系统总线
+     *     （systema 的 D-Bus 服务依赖它）；
+     *  2. 依次在 PATH、/usr/local/bin、/usr/bin 中查找 systema-sysi；
+     *  3. 找到则后台启动（日志写入 /var/log/systema.log），
+     *     否则打印未安装提示。
+     */
+    private fun buildSystemaStartCommand(): String = listOf(
+        "if command -v dbus-daemon >/dev/null 2>&1 && [ ! -S /run/dbus/system_bus_socket ]; then " +
+            "mkdir -p /run/dbus && (dbus-daemon --system --fork >/dev/null 2>&1 || true); fi",
+        "sa=\$(command -v systema-sysi 2>/dev/null || true)",
+        "[ -z \"\$sa\" ] && [ -x /usr/local/bin/systema-sysi ] && sa=/usr/local/bin/systema-sysi",
+        "[ -z \"\$sa\" ] && [ -x /usr/bin/systema-sysi ] && sa=/usr/bin/systema-sysi",
+        "if [ -n \"\$sa\" ]; then " +
+            "mkdir -p /run/systema && nohup \"\$sa\" >/var/log/systema.log 2>&1 & " +
+            "echo \"[tiny] systema started: \$sa\"; " +
+            "else echo \"[tiny] systema-sysi not found; install systema first (experimental feature)\"; fi"
+    ).joinToString("; ")
 
     /**
      * 将 VNC 服务端启动命令适配为「TCP 端口 + Unix 套接字」双监听模式。
