@@ -346,13 +346,8 @@ class ContainerMainViewModel(
                     val adaptToScreenSize = feature["adapt_to_screen_size"] as? Boolean ?: continue
                     val scaleRatio = (feature["scale_ratio"] as? Number)?.toDouble() ?: continue
                     val useUnixSocket = feature["use_unix_socket"] as? Boolean ?: true
-                    // 开关关闭时把服务端命令适配为监听 TCP 端口，否则服务端
-                    // 仍只监听 Unix 套接字，下方等待的 TCP 端口永远无法就绪
-                    Global.sendCommand(
-                        if (useUnixSocket) command
-                        else adaptVncCommandForTcp(command, extractPort(link))
-                    )
                     if (useUnixSocket) {
+                        Global.sendCommand(command)
                         if (!waitForFile("${getApplication<Application>().filesDir}/tmp/.tiny.vnc")) {
                             continue
                         }
@@ -360,9 +355,19 @@ class ContainerMainViewModel(
                         val port = extractPort(link)
                         Log.d(TAG, "avnc: link=$link port=$port waiting for port...")
                         if (port == null) continue
+                        // 开关关闭时把服务端命令适配为监听 TCP 端口，否则服务端
+                        // 仍只监听 Unix 套接字，下方等待的 TCP 端口永远无法就绪
+                        val (adaptedCommand, keepsUnixSocket) = adaptVncCommandForTcp(command, port)
+                        Global.sendCommand(adaptedCommand)
                         if (!waitForPort(port)) {
                             Log.e(TAG, "avnc: port=$port not ready, giving up")
                             continue
+                        }
+                        // 适配后通常仍保留 -rfbunixpath（镜像命令要等套接字文件
+                        // 出现才会执行 startxfce4 启动桌面），这里继续等待它，
+                        // 确保打开 VNC 时桌面已就绪；自定义命令不含该参数时跳过
+                        if (keepsUnixSocket) {
+                            waitForFile("${getApplication<Application>().filesDir}/tmp/.tiny.vnc")
                         }
                     }
                     _navigationEvents.tryEmit(GuiNavigationEvent.OpenAvnc(link, adaptToScreenSize, scaleRatio, useUnixSocket))
@@ -609,7 +614,7 @@ class ContainerMainViewModel(
     }
 
     /**
-     * 将 VNC 服务端启动命令适配为监听 TCP 端口的模式。
+     * 将 VNC 服务端启动命令适配为「TCP 端口 + Unix 套接字」双监听模式。
      *
      * 镜像自带的示例命令（如 Xtigervnc）通常写作
      * "-rfbport -1 -rfbunixpath /tmp/.tiny.vnc"，即仅监听 Unix 套接字；
@@ -617,16 +622,23 @@ class ContainerMainViewModel(
      * link 中声明的 TCP 端口（如 vnc://127.0.0.1:5906），服务端却不会
      * 在该端口上监听，开关形同虚设。
      *
-     * 这里在发送前把 -rfbport 的值（含 -1）替换为 link 中的端口，
-     * 并移除 -rfbunixpath，使服务端改为监听 TCP 端口；
-     * 对不含这些参数的命令（如 tmoe 的 startvnc）原样返回。
+     * 这里在发送前把 -rfbport 的值（含 -1）替换为 link 中的端口；
+     * 注意必须保留 -rfbunixpath：镜像命令在启动桌面（startxfce4）前
+     * 会循环等待套接字文件出现，若移除该参数，套接字永远不会创建，
+     * 桌面永远不会启动，客户端连上后只能看到黑屏的根窗口。
+     * TigerVNC 支持同时监听 Unix 套接字与 TCP 端口（vncExtInit.cc 中
+     * 两类监听器依次创建），因此保留套接字参数即可两全其美：
+     * 容器内部流程照常，外部客户端也能通过 TCP 连接。
+     * 对不含 rfb 参数的命令（如 tmoe 的 startvnc）原样返回。
      * 仅在运行时生效，不修改保存在配置中的命令原文。
+     *
+     * @return 适配后的命令，以及适配后命令是否仍会创建 Unix 套接字文件
+     *         （用于判断 TCP 端口就绪后是否还需要等待套接字以确认桌面就绪）
      */
-    private fun adaptVncCommandForTcp(command: String, port: Int?): String {
-        if (port == null) return command
-        return command
-            .replace(Regex("""-rfbport[ =]-?\d+\b"""), "-rfbport $port")
-            .replace(Regex("""-rfbunixpath[ =]\S+"""), "")
+    private fun adaptVncCommandForTcp(command: String, port: Int?): Pair<String, Boolean> {
+        if (port == null) return command to command.contains("-rfbunixpath")
+        val adapted = command.replace(Regex("""-rfbport[ =]-?\d+\b"""), "-rfbport $port")
+        return adapted to adapted.contains(Regex("""-rfbunixpath[ =]\S+"""))
     }
 
     private suspend fun waitForPort(port: Int, timeoutMs: Long = 15_000): Boolean {
