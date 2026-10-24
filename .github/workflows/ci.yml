@@ -104,7 +104,8 @@ jobs:
             -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | grep SHA256 || true
 
       - name: 构建 APK 并运行单元测试
-        run: ./gradlew :app:assembleRelease :app:testReleaseUnitTest --no-daemon
+        # AGP 9 默认只为 testBuildType（debug）创建单元测试任务
+        run: ./gradlew :app:assembleRelease :app:testDebugUnitTest --no-daemon
 
       - name: 上传 APK 构件
         uses: actions/upload-artifact@v7
