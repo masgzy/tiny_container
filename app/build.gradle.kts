@@ -40,7 +40,7 @@ android {
         minSdk = 28
         targetSdk = 37
         versionCode = 4
-        versionName = "4.2.3"
+        versionName = "4.2.3-fork-1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters.add("arm64-v8a")
