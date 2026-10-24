@@ -356,7 +356,7 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
                 )
             )
         } else {
-            list?.let { lst ->
+            val items = list?.let { lst ->
                 val count = lst.size
                 lst.mapIndexed { i, m ->
                 val type = m["type"] as? String ?: "unknown"
@@ -396,6 +396,22 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 }
             } ?: emptyList()
+            // 内置「重启 / 关机」入口：仅命令 tab 根层级展示，以虚拟节点形式
+            // 插在第 3 位（前两个条目之后），不持久化到 config；
+            // 各真实节点仍携带配置列表中的原始 index，点击/多选均按下标操作
+            if (_currentTab.value == Tab.COMMANDS && currentPath.isEmpty() && items.isNotEmpty()) {
+                items.toMutableList().apply {
+                    add(
+                        minOf(2, size),
+                        QuicksNodeItem.PowerFolderItem(
+                            name = app.getString(R.string.tc4_power_menu_title),
+                            description = app.getString(R.string.tc4_power_menu_desc)
+                        )
+                    )
+                }
+            } else {
+                items
+            }
         }
 
         val breadcrumbs = generateBreadcrumbs().toMutableList().apply {
@@ -486,7 +502,8 @@ sealed class QuicksNodeItem {
 
     /**
      * 内置「重启 / 关机」入口（仅展示，不持久化到 config，
-     * 通过独立的 PowerFolderAdapter 挂在列表顶部）
+     * 由 refresh() 以虚拟节点形式插在命令 tab 根列表第 3 位，
+     * 不占用配置索引，避免与多选/删除/编辑的下标逻辑相互干扰）
      */
     data class PowerFolderItem(
         override val name: String,

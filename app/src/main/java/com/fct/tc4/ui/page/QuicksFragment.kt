@@ -29,7 +29,6 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
@@ -76,8 +75,6 @@ class QuicksFragment : Fragment() {
     }
 
     private lateinit var adapter: QuicksNodesAdapter
-    /** 内置「重启 / 关机」入口，始终挂在命令 tab 根层级的列表顶部 */
-    private lateinit var powerAdapter: PowerFolderAdapter
     /** 每个深度的滚动位置栈，进入子项时 push，返回时 pop */
     private data class ScrollPos(val position: Int, val offset: Int)
     private val scrollPositions = Stack<ScrollPos>()
@@ -146,11 +143,13 @@ class QuicksFragment : Fragment() {
         adapter = QuicksNodesAdapter(object : QuicksNodeCallbacks {
             override fun onItemClick(index: Int, item: QuicksNodeItem) {
                 // 防止快速点击时 adapter 当前列表尚未完成 DiffUtil 异步更新,
-                // 导致使用过时 item 执行错误操作(如将子命令当作文件夹打开)
-                val currentItem = viewModel.displayState.value.nodes.getOrNull(index)
+                // 导致使用过时 item 执行错误操作(如将子命令当作文件夹打开)。
+                // 注意 ViewHolder 传入的 index 是节点在配置列表中的真实下标，
+                // 而展示列表中可能插入了内置「重启 / 关机」虚拟节点，
+                // 因此这里按 item 内容在当前列表中查找，而不是按位置取值
                 if (item !is QuicksNodeItem.PowerFolderItem &&
                     item !is QuicksNodeItem.PowerActionItem &&
-                    currentItem != item
+                    item !in viewModel.displayState.value.nodes
                 ) return
 
                 // 选择模式下点击 = 切换选中（内置电源项不参与多选）
@@ -190,13 +189,7 @@ class QuicksFragment : Fragment() {
                 viewModel.toggleSelection(index)
             }
         })
-        powerAdapter = PowerFolderAdapter {
-            // 多选进行中不响应电源入口，避免误清空选择
-            if (viewModel.selectedIndices.value.isEmpty()) {
-                viewModel.enterPowerMenu()
-            }
-        }
-        binding.recyclerView.adapter = ConcatAdapter(powerAdapter, adapter)
+        binding.recyclerView.adapter = adapter
         binding.recyclerView.layoutManager = LinearLayoutManager(requireContext())
 
         // ========== ButtonGroup 切换 ==========
@@ -335,12 +328,7 @@ class QuicksFragment : Fragment() {
                     }
                 }
 
-                // 电源入口仅显示在命令 tab 的根层级，进入二级菜单后隐藏
-                powerAdapter.setVisible(
-                    viewModel.currentTab.value == QuicksViewModel.Tab.COMMANDS &&
-                        !state.isPowerMenu &&
-                        state.breadcrumbs.size <= 1
-                )
+                // （内置「重启 / 关机」入口的显隐与插入位置由 QuicksViewModel.refresh() 控制）
 
                 backCallback.isEnabled = viewModel.pathDepth > 0
 
@@ -721,39 +709,3 @@ private class OptionVH(
     }
 }
 
-/**
- * 内置「重启 / 关机」入口卡片：独立 Adapter 挂在列表顶部（ConcatAdapter），
- * 不占用配置列表索引，避免与多选/删除/编辑的下标逻辑相互干扰。
- */
-private class PowerFolderAdapter(
-    private val onOpen: () -> Unit
-) : RecyclerView.Adapter<PowerFolderAdapter.PowerFolderVH>() {
-
-    var visible = true
-        private set
-
-    fun setVisible(value: Boolean) {
-        if (visible == value) return
-        visible = value
-        if (value) notifyItemInserted(0) else notifyItemRemoved(0)
-    }
-
-    override fun getItemCount() = if (visible) 1 else 0
-
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PowerFolderVH {
-        val b = Tc4QuickFolderItemBinding.inflate(
-            LayoutInflater.from(parent.context), parent, false
-        )
-        return PowerFolderVH(b)
-    }
-
-    override fun onBindViewHolder(holder: PowerFolderVH, position: Int) {
-        val context = holder.binding.root.context
-        holder.binding.name.text = context.getString(R.string.tc4_power_menu_title)
-        holder.binding.description.text = context.getString(R.string.tc4_power_menu_desc)
-        holder.binding.root.setOnClickListener { onOpen() }
-    }
-
-    class PowerFolderVH(val binding: Tc4QuickFolderItemBinding) :
-        RecyclerView.ViewHolder(binding.root)
-}
