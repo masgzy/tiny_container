@@ -217,7 +217,7 @@ class ContainerMainViewModel(
             _errorMessage.value = getApplication<Application>().getString(R.string.tc4_container_missing_boot_cmd, code)
             return
         }
-        val resolvedBootCmd = bootCmd
+        val resolvedBootCmd = sanitizeKernelRelease(bootCmd)
             .replace("\$EXTRA_ARGS", merged.args.joinToString(" "))
             .replace("\$EXTRA_PATH", merged.path.joinToString(":"))
             .replace("\$EXTRA_LD_LIBRARY_PATH", merged.ldLibraryPath.joinToString(":"))
@@ -234,6 +234,28 @@ class ContainerMainViewModel(
         }
 
         launchEnabledFeature()
+    }
+
+    /**
+     * 净化 boot_command 中 proot 的 --kernel-release 参数。
+     * 部分容器镜像（如基于 proot-distro 的 Debian 13 XFCE）把 uname -a 的完整输出
+     * （含空格，如 "Linux localhost 6.17.0-PRoot-Distro #1 SMP PREEMPT_DYNAMIC ..."）
+     * 传给了该参数，导致容器内 uname -r 返回带空格的字符串，
+     * 而 Debian 13 的 libc6 preinst 等脚本会以算术方式解析 uname -r 的版本号，
+     * 遇到空格即报错，造成 apt upgrade 失败（libc6 留在 broken 状态）。
+     * 因此这里只保留参数值中形如 x.y.z 的版本号字段，如 "6.17.0-PRoot-Distro"。
+     * 参考：https://github.com/Cateners/tiny_container/issues/621
+     */
+    private fun sanitizeKernelRelease(bootCommand: String): String {
+        val releaseRegex = Regex("""--kernel-release=(?:"([^"]*)"|'([^']*)'|(\S+))""")
+        val versionTokenRegex = Regex("""\d+(\.\d+)+.*""")
+        return releaseRegex.replace(bootCommand) { match ->
+            val raw = match.groupValues[1].ifEmpty { match.groupValues[2].ifEmpty { match.groupValues[3] } }
+            val tokens = raw.trim().split(Regex("\\s+"))
+            val release = tokens.firstOrNull { it.matches(versionTokenRegex) } ?: tokens.first()
+            val escaped = release.replace("\\", "\\\\").replace("$", "\\$").replace("\"", "\\\"")
+            "--kernel-release=\"$escaped\""
+        }
     }
 
     // ===================== 图形界面处理 =====================
