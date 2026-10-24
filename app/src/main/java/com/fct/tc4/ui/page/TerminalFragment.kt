@@ -123,6 +123,18 @@ class TerminalFragment : Fragment() {
             }
         }
 
+        // 会话被整体替换时（如快捷命令里的重启容器）重新绑定新会话
+        lifecycleScope.launch {
+            Global.sessionReplacedEvent.collect {
+                val session = Global.terminalSession ?: return@collect
+                binding.terminalView.attachSession(session)
+                session.emulator?.mColors?.mCurrentColors?.let { colors ->
+                    colors[TextStyle.COLOR_INDEX_FOREGROUND] = fgColor
+                }
+                binding.terminalView.onScreenUpdated()
+            }
+        }
+
         extraKeys.attachTerminalView(binding.terminalView)
         extraKeys.onToggleIme = {
             val imm = requireContext().getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager

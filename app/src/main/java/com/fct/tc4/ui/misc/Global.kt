@@ -91,6 +91,10 @@ object Global {
     private val _screenUpdateEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 64)
     val screenUpdateEvent: SharedFlow<Unit> = _screenUpdateEvent.asSharedFlow()
 
+    /** 终端会话被整体替换时（如重启容器）通知终端视图重新绑定新会话 */
+    private val _sessionReplacedEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val sessionReplacedEvent: SharedFlow<Unit> = _sessionReplacedEvent.asSharedFlow()
+
     private val defaultSessionCallback = object : TerminalSession.SessionChangedCallback {
         override fun onTextChanged(changedSession: TerminalSession?) {
             _screenUpdateEvent.tryEmit(Unit)
@@ -183,6 +187,7 @@ object Global {
         )
         session.updateSize(80, 24)
         terminalSession = session
+        _sessionReplacedEvent.tryEmit(Unit)
         return session
     }
 

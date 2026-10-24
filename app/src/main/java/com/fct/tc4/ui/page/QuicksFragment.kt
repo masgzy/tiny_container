@@ -29,6 +29,7 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
@@ -74,6 +75,8 @@ class QuicksFragment : Fragment() {
     }
 
     private lateinit var adapter: QuicksNodesAdapter
+    /** 内置「重启 / 关机」入口，始终挂在命令 tab 根层级的列表顶部 */
+    private lateinit var powerAdapter: PowerFolderAdapter
     /** 每个深度的滚动位置栈，进入子项时 push，返回时 pop */
     private data class ScrollPos(val position: Int, val offset: Int)
     private val scrollPositions = Stack<ScrollPos>()
@@ -144,14 +147,23 @@ class QuicksFragment : Fragment() {
                 // 防止快速点击时 adapter 当前列表尚未完成 DiffUtil 异步更新,
                 // 导致使用过时 item 执行错误操作(如将子命令当作文件夹打开)
                 val currentItem = viewModel.displayState.value.nodes.getOrNull(index)
-                if (currentItem != item) return
+                if (item !is QuicksNodeItem.PowerFolderItem &&
+                    item !is QuicksNodeItem.PowerActionItem &&
+                    currentItem != item
+                ) return
 
-                // 选择模式下点击 = 切换选中
+                // 选择模式下点击 = 切换选中（内置电源项不参与多选）
                 if (viewModel.selectedIndices.value.isNotEmpty()) {
-                    viewModel.toggleSelection(index)
+                    if (item !is QuicksNodeItem.PowerFolderItem &&
+                        item !is QuicksNodeItem.PowerActionItem
+                    ) {
+                        viewModel.toggleSelection(index)
+                    }
                     return
                 }
                 when (item) {
+                    is QuicksNodeItem.PowerFolderItem -> viewModel.enterPowerMenu()
+                    is QuicksNodeItem.PowerActionItem -> handlePowerAction(item.action)
                     is QuicksNodeItem.CommandItem -> {
                         if (item.command.isNotBlank()) {
                             Global.sendCommand(item.command)
@@ -170,11 +182,20 @@ class QuicksFragment : Fragment() {
                 }
             }
 
-            override fun onItemLongClick(index: Int) {
+            override fun onItemLongClick(index: Int, item: QuicksNodeItem) {
+                if (item is QuicksNodeItem.PowerFolderItem ||
+                    item is QuicksNodeItem.PowerActionItem
+                ) return
                 viewModel.toggleSelection(index)
             }
         })
-        binding.recyclerView.adapter = adapter
+        powerAdapter = PowerFolderAdapter {
+            // 多选进行中不响应电源入口，避免误清空选择
+            if (viewModel.selectedIndices.value.isEmpty()) {
+                viewModel.enterPowerMenu()
+            }
+        }
+        binding.recyclerView.adapter = ConcatAdapter(powerAdapter, adapter)
         binding.recyclerView.layoutManager = LinearLayoutManager(requireContext())
 
         // ========== ButtonGroup 切换 ==========
@@ -313,6 +334,13 @@ class QuicksFragment : Fragment() {
                     }
                 }
 
+                // 电源入口仅显示在命令 tab 的根层级，进入二级菜单后隐藏
+                powerAdapter.setVisible(
+                    viewModel.currentTab.value == QuicksViewModel.Tab.COMMANDS &&
+                        !state.isPowerMenu &&
+                        state.breadcrumbs.size <= 1
+                )
+
                 backCallback.isEnabled = viewModel.pathDepth > 0
 
                 val depth = state.breadcrumbs.size
@@ -377,6 +405,25 @@ class QuicksFragment : Fragment() {
     }
 
     // ===================== 辅助方法 =====================
+
+    /** 执行「重启 / 关机」二级菜单中的动作 */
+    private fun handlePowerAction(action: QuicksViewModel.PowerAction) {
+        when (action) {
+            QuicksViewModel.PowerAction.RESTART -> {
+                viewModel.exitPowerMenu()
+                parentVM.restartContainer()
+                if (!mainViewModel.isTerminalOpen.value) {
+                    mainViewModel.toggleTerminal()
+                }
+                Snackbar.make(binding.root, R.string.tc4_power_restarting, Snackbar.LENGTH_SHORT).show()
+            }
+            QuicksViewModel.PowerAction.SHUTDOWN -> {
+                mainViewModel.closeTerminal()
+                parentVM.exitContainer()
+                mainViewModel.navigateTo(MainViewModel.Screen.ContainerManage)
+            }
+        }
+    }
 
     private fun saveScrollState() {
         val lm = binding.recyclerView.layoutManager as LinearLayoutManager
@@ -501,7 +548,7 @@ class QuicksFragment : Fragment() {
 
 interface QuicksNodeCallbacks {
     fun onItemClick(index: Int, item: QuicksNodeItem)
-    fun onItemLongClick(index: Int)
+    fun onItemLongClick(index: Int, item: QuicksNodeItem)
 }
 
 // ===================== 适配器（ListAdapter + 异步 DiffUtil） =====================
@@ -514,6 +561,7 @@ private class QuicksNodesAdapter(
         private const val TYPE_COMMAND = 0
         private const val TYPE_FOLDER = 1
         private const val TYPE_OPTION = 2
+        private const val TYPE_POWER_ACTION = 3
 
         private val DIFF_CALLBACK = object : DiffUtil.ItemCallback<QuicksNodeItem>() {
             override fun areItemsTheSame(old: QuicksNodeItem, new: QuicksNodeItem) =
@@ -525,9 +573,11 @@ private class QuicksNodesAdapter(
 
     override fun getItemViewType(position: Int): Int = when (currentList[position]) {
         is QuicksNodeItem.CommandItem -> TYPE_COMMAND
+        is QuicksNodeItem.PowerFolderItem -> TYPE_FOLDER
         is QuicksNodeItem.CommandsFolderItem -> TYPE_FOLDER
         is QuicksNodeItem.OptionItem -> TYPE_OPTION
         is QuicksNodeItem.OptionsFolderItem -> TYPE_FOLDER
+        is QuicksNodeItem.PowerActionItem -> TYPE_POWER_ACTION
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
@@ -545,6 +595,10 @@ private class QuicksNodesAdapter(
                 val b = Tc4QuickOptionItemBinding.inflate(inflater, parent, false)
                 OptionVH(b, callbacks)
             }
+            TYPE_POWER_ACTION -> {
+                val b = Tc4QuickPowerItemBinding.inflate(inflater, parent, false)
+                PowerActionVH(b, callbacks)
+            }
             else -> error("unknown view type: $viewType")
         }
     }
@@ -556,6 +610,7 @@ private class QuicksNodesAdapter(
             is CommandVH -> holder.bind(item as QuicksNodeItem.CommandItem, position, count)
             is FolderVH -> holder.bind(item, position, count)
             is OptionVH -> holder.bind(item as QuicksNodeItem.OptionItem, position, count)
+            is PowerActionVH -> holder.bind(item as QuicksNodeItem.PowerActionItem, position, count)
         }
     }
 }
@@ -581,7 +636,7 @@ private class CommandVH(
         )
         itemView.setOnClickListener { callbacks.onItemClick(item.index, item) }
         itemView.setOnLongClickListener {
-            callbacks.onItemLongClick(item.index)
+            callbacks.onItemLongClick(item.index, item)
             true
         }
     }
@@ -606,9 +661,30 @@ private class FolderVH(
         )
         itemView.setOnClickListener { callbacks.onItemClick(item.index, item) }
         itemView.setOnLongClickListener {
-            callbacks.onItemLongClick(item.index)
+            callbacks.onItemLongClick(item.index, item)
             true
         }
+    }
+}
+
+/** 「重启 / 关机」二级菜单中的动作项（重启容器 / 关机） */
+private class PowerActionVH(
+    private val binding: Tc4QuickPowerItemBinding,
+    private val callbacks: QuicksNodeCallbacks
+) : ListItemViewHolder(binding.root) {
+
+    fun bind(item: QuicksNodeItem.PowerActionItem, position: Int, itemCount: Int) {
+        super.bind(position, itemCount)
+        binding.icon.setImageResource(
+            if (item.action == QuicksViewModel.PowerAction.RESTART)
+                R.drawable.restart_24dp_eaddff_fill0_wght400_grad0_opsz24
+            else
+                R.drawable.power_24dp_eaddff_fill0_wght400_grad0_opsz24
+        )
+        binding.name.text = item.name
+        binding.description.text = item.description.trim()
+        binding.description.visibility = if (item.description.isEmpty()) View.GONE else View.VISIBLE
+        itemView.setOnClickListener { callbacks.onItemClick(item.index, item) }
     }
 }
 
@@ -638,8 +714,45 @@ private class OptionVH(
             callbacks.onItemClick(item.index, item)
         }
         itemView.setOnLongClickListener {
-            callbacks.onItemLongClick(item.index)
+            callbacks.onItemLongClick(item.index, item)
             true
         }
     }
+}
+
+/**
+ * 内置「重启 / 关机」入口卡片：独立 Adapter 挂在列表顶部（ConcatAdapter），
+ * 不占用配置列表索引，避免与多选/删除/编辑的下标逻辑相互干扰。
+ */
+private class PowerFolderAdapter(
+    private val onOpen: () -> Unit
+) : RecyclerView.Adapter<PowerFolderAdapter.PowerFolderVH>() {
+
+    var visible = true
+        private set
+
+    fun setVisible(value: Boolean) {
+        if (visible == value) return
+        visible = value
+        if (value) notifyItemInserted(0) else notifyItemRemoved(0)
+    }
+
+    override fun getItemCount() = if (visible) 1 else 0
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PowerFolderVH {
+        val b = Tc4QuickFolderItemBinding.inflate(
+            LayoutInflater.from(parent.context), parent, false
+        )
+        return PowerFolderVH(b)
+    }
+
+    override fun onBindViewHolder(holder: PowerFolderVH, position: Int) {
+        val context = holder.binding.root.context
+        holder.binding.name.text = context.getString(R.string.tc4_power_menu_title)
+        holder.binding.description.text = context.getString(R.string.tc4_power_menu_desc)
+        holder.binding.root.setOnClickListener { onOpen() }
+    }
+
+    class PowerFolderVH(val binding: Tc4QuickFolderItemBinding) :
+        RecyclerView.ViewHolder(binding.root)
 }

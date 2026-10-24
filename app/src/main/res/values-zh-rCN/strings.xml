@@ -143,6 +143,13 @@
     <string name="tc4_quick_import_partial">成功导入 %1$d 个，失败 %2$d 个</string>
     <string name="tc4_quick_import_failed">导入失败：%1$s</string>
     <string name="tc4_quick_copied">已复制 %1$d 个节点到剪贴板</string>
+    <string name="tc4_power_menu_title">重启 / 关机</string>
+    <string name="tc4_power_menu_desc">重启容器，或结束容器会话并返回管理页。</string>
+    <string name="tc4_power_restart">重启容器</string>
+    <string name="tc4_power_restart_desc">结束当前容器会话并重新启动。</string>
+    <string name="tc4_power_shutdown">关机</string>
+    <string name="tc4_power_shutdown_desc">结束容器会话并返回管理页。</string>
+    <string name="tc4_power_restarting">正在重启容器…</string>
 
     <!-- ==================== Validation ==================== -->
     <string name="tc4_validate_name_empty">名称不能为空</string>

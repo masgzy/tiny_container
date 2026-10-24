@@ -143,6 +143,13 @@
     <string name="tc4_quick_import_partial">Imported %1$d, failed %2$d</string>
     <string name="tc4_quick_import_failed">Import failed: %1$s</string>
     <string name="tc4_quick_copied">Copied %1$d node(s) to clipboard</string>
+    <string name="tc4_power_menu_title">Restart / Shutdown</string>
+    <string name="tc4_power_menu_desc">Restart the container, or end the session and return to the manage page.</string>
+    <string name="tc4_power_restart">Restart Container</string>
+    <string name="tc4_power_restart_desc">End the current session and boot the container again.</string>
+    <string name="tc4_power_shutdown">Shutdown</string>
+    <string name="tc4_power_shutdown_desc">End the container session and return to the manage page.</string>
+    <string name="tc4_power_restarting">Restarting container…</string>
 
     <!-- ==================== Validation ==================== -->
     <string name="tc4_validate_name_empty">Name cannot be empty</string>

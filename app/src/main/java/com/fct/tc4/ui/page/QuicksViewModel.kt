@@ -34,6 +34,9 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
 
     enum class Tab { COMMANDS, OPTIONS }
 
+    /** 内置「重启 / 关机」二级菜单中的动作 */
+    enum class PowerAction { RESTART, SHUTDOWN }
+
     // ===================== Config 引用 =====================
 
     private var configRef: MutableMap<String, Any>? = null
@@ -57,7 +60,12 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
     private val optionsPath = mutableListOf<Int>()
     private val currentPath: MutableList<Int>
         get() = if (_currentTab.value == Tab.COMMANDS) commandsPath else optionsPath
-    val pathDepth: Int get() = currentPath.size
+
+    /** 是否处于内置「重启 / 关机」二级菜单 */
+    private var inPowerMenu = false
+
+    val pathDepth: Int
+        get() = currentPath.size + (if (inPowerMenu) 1 else 0)
 
     // ===================== UI 状态（合并为单次发射） =====================
 
@@ -107,7 +115,25 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
     fun switchTab(tab: Tab) {
         if (_currentTab.value == tab) return
         _currentTab.value = tab
+        inPowerMenu = false
         _selectedIndices.value = emptySet()
+        refresh()
+    }
+
+    // ===================== 内置电源菜单（重启 / 关机） =====================
+
+    /** 进入内置「重启 / 关机」二级菜单（仅限命令 tab 根层级） */
+    fun enterPowerMenu() {
+        if (inPowerMenu || currentPath.isNotEmpty()) return
+        _selectedIndices.value = emptySet()
+        inPowerMenu = true
+        refresh()
+    }
+
+    /** 退出内置「重启 / 关机」二级菜单 */
+    fun exitPowerMenu() {
+        if (!inPowerMenu) return
+        inPowerMenu = false
         refresh()
     }
 
@@ -122,6 +148,7 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
     fun navigateToBreadcrumb(level: Int) {
         // level -1 = root, level 0 = first folder, level 1 = second folder
         // targetSize = level + 1
+        inPowerMenu = false
         val targetSize = level + 1
         while (currentPath.size > targetSize) {
             currentPath.removeAt(currentPath.lastIndex)
@@ -133,6 +160,7 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
     // ===================== 多选操作 =====================
 
     fun toggleSelection(index: Int) {
+        if (inPowerMenu) return
         val current = _selectedIndices.value
         _selectedIndices.value = if (index in current) current - index else current + index
         refresh()
@@ -310,12 +338,27 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
 
     @Suppress("UNCHECKED_CAST")
     private fun refresh() {
+        val app = getApplication<Application>()
         val list = getCurrentList()
         val sel = _selectedIndices.value
 
-        val nodes = list?.let { lst ->
-            val count = lst.size
-            lst.mapIndexed { i, m ->
+        val nodes = if (inPowerMenu) {
+            listOf(
+                QuicksNodeItem.PowerActionItem(
+                    index = 0, action = PowerAction.RESTART,
+                    name = app.getString(R.string.tc4_power_restart),
+                    description = app.getString(R.string.tc4_power_restart_desc)
+                ),
+                QuicksNodeItem.PowerActionItem(
+                    index = 1, action = PowerAction.SHUTDOWN,
+                    name = app.getString(R.string.tc4_power_shutdown),
+                    description = app.getString(R.string.tc4_power_shutdown_desc)
+                )
+            )
+        } else {
+            list?.let { lst ->
+                val count = lst.size
+                lst.mapIndexed { i, m ->
                 val type = m["type"] as? String ?: "unknown"
                 val name = m["name"] as? String ?: ""
                 val desc = m["description"] as? String ?: ""
@@ -351,28 +394,37 @@ class QuicksViewModel(application: Application) : AndroidViewModel(application) 
                         command = ""
                     )
                 }
+                }
+            } ?: emptyList()
+        }
+
+        val breadcrumbs = generateBreadcrumbs().apply {
+            if (inPowerMenu) {
+                add(BreadcrumbChip(app.getString(R.string.tc4_power_menu_title), level = currentPath.size))
             }
-        } ?: emptyList()
+        }
 
-        val breadcrumbs = generateBreadcrumbs()
-
-        val (headerTitle, headerDesc) = if (currentPath.isEmpty()) {
-            val app = getApplication<Application>()
-            if (_currentTab.value == Tab.COMMANDS)
-                app.getString(R.string.tc4_quick_commands_tab) to app.getString(R.string.tc4_quick_commands_default_desc)
-            else
-                app.getString(R.string.tc4_quick_options_tab) to app.getString(R.string.tc4_quick_options_default_desc)
-        } else {
-            val parentNode = getNodeAtPath(currentPath)
-            (parentNode?.get("name") as? String ?: "") to
-                    (parentNode?.get("description") as? String ?: "")
+        val (headerTitle, headerDesc) = when {
+            inPowerMenu ->
+                app.getString(R.string.tc4_power_menu_title) to app.getString(R.string.tc4_power_menu_desc)
+            currentPath.isEmpty() ->
+                if (_currentTab.value == Tab.COMMANDS)
+                    app.getString(R.string.tc4_quick_commands_tab) to app.getString(R.string.tc4_quick_commands_default_desc)
+                else
+                    app.getString(R.string.tc4_quick_options_tab) to app.getString(R.string.tc4_quick_options_default_desc)
+            else -> {
+                val parentNode = getNodeAtPath(currentPath)
+                (parentNode?.get("name") as? String ?: "") to
+                        (parentNode?.get("description") as? String ?: "")
+            }
         }
 
         _displayState.value = QuickDisplayState(
             nodes = nodes,
             breadcrumbs = breadcrumbs,
             headerTitle = headerTitle,
-            headerDesc = headerDesc
+            headerDesc = headerDesc,
+            isPowerMenu = inPowerMenu
         )
     }
 
@@ -420,7 +472,9 @@ data class QuickDisplayState(
     val nodes: List<QuicksNodeItem> = emptyList(),
     val breadcrumbs: List<BreadcrumbChip> = emptyList(),
     val headerTitle: String = "",
-    val headerDesc: String = ""
+    val headerDesc: String = "",
+    /** 是否处于内置「重启 / 关机」二级菜单 */
+    val isPowerMenu: Boolean = false
 )
 
 sealed class QuicksNodeItem {
@@ -429,6 +483,30 @@ sealed class QuicksNodeItem {
     abstract val description: String
     abstract val isSelected: Boolean
     abstract val totalCount: Int
+
+    /**
+     * 内置「重启 / 关机」入口（仅展示，不持久化到 config，
+     * 通过独立的 PowerFolderAdapter 挂在列表顶部）
+     */
+    data class PowerFolderItem(
+        override val name: String,
+        override val description: String
+    ) : QuicksNodeItem() {
+        override val index = -1
+        override val isSelected = false
+        override val totalCount = 0
+    }
+
+    /** 「重启 / 关机」二级菜单中的动作项 */
+    data class PowerActionItem(
+        override val index: Int,
+        val action: QuicksViewModel.PowerAction,
+        override val name: String,
+        override val description: String
+    ) : QuicksNodeItem() {
+        override val isSelected = false
+        override val totalCount = 0
+    }
 
     data class CommandItem(
         override val index: Int,
