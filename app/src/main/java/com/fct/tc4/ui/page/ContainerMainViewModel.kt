@@ -647,7 +647,7 @@ class ContainerMainViewModel(
         "[ -z \"\$sa\" ] && [ -x /usr/local/bin/systema-sysi ] && sa=/usr/local/bin/systema-sysi",
         "[ -z \"\$sa\" ] && [ -x /usr/bin/systema-sysi ] && sa=/usr/bin/systema-sysi",
         "if [ -n \"\$sa\" ]; then " +
-            "mkdir -p /run/systema && nohup \"\$sa\" >/var/log/systema.log 2>&1 & " +
+            "mkdir -p /run/systema /var/log/systema && nohup \"\$sa\" >/var/log/systema.log 2>&1 & " +
             "echo \"[tiny] systema started: \$sa\"; " +
             "else echo \"[tiny] systema-sysi not found; install systema first (experimental feature)\"; fi"
     ).joinToString("; ")
