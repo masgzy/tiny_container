@@ -132,21 +132,60 @@ class ContainerMainViewModel(
 
     fun exitContainer() {
         Global.onSessionSignal9 = null // 主动退出，不触发 signal 9 跳转
-        killXServer()
-        TinyAudio.stop()
-        TinyMicrophone.stop()
-        TinyIpp.stop()
-        TinyStorage.stop()
-        val pid = Global.terminalSession?.pid ?: 0
-        if (pid > 0) {
-            Os.kill(-pid, OsConstants.SIGQUIT)
-        }
+        stopContainerServices()
+        stopContainerSession()
         Global.newSession()
         Global.setupEnvironment()
         Global.sendCommand("rm ${getApplication<Application>().filesDir}/boot_${code}.sh")
         val merged = collectEnabledOptions()
         for (cmd in merged.postEndHostCommands) {
             Global.sendCommand(cmd)
+        }
+    }
+
+    /**
+     * 重启容器：结束当前会话与相关服务后，重新走一遍启动流程。
+     * 与「关机」的区别是不返回管理页，且不执行 post_end_host_command
+     * （重启即重新开始，环境由 launchContainer 重新收集；避免在临时会话
+     * 之间反复切换导致命令丢失）。
+     */
+    fun restartContainer() {
+        viewModelScope.launch {
+            Global.onSessionSignal9 = null
+            stopContainerServices()
+            stopContainerSession()
+            // 给旧进程组一点时间完全退出，避免端口/套接字残留
+            delay(1000)
+            // 清理残留的 VNC Unix 套接字，避免新的 VNC 服务端 bind 失败
+            File(getApplication<Application>().filesDir, "tmp/.tiny.vnc").delete()
+            Global.terminalSession?.finishIfRunning()
+            newTerminalSession()
+            Global.setupEnvironment()
+            Global.sendCommand("rm ${getApplication<Application>().filesDir}/boot_${code}.sh")
+            setupContainerEnvironment()
+            withContext(Dispatchers.IO) {
+                launchContainer()
+            }
+        }
+    }
+
+    /** 结束容器相关的前台服务（X server / 音频 / 打印 / 麦克风 / 外置存储） */
+    private fun stopContainerServices() {
+        killXServer()
+        TinyAudio.stop()
+        TinyMicrophone.stop()
+        TinyIpp.stop()
+        TinyStorage.stop()
+    }
+
+    /** 向当前会话的进程组发送 SIGQUIT，结束容器（会话可能已退出，忽略异常） */
+    private fun stopContainerSession() {
+        val pid = Global.terminalSession?.pid ?: 0
+        if (pid > 0) {
+            try {
+                Os.kill(-pid, OsConstants.SIGQUIT)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -178,8 +217,13 @@ class ContainerMainViewModel(
     }
 
     private fun setupEnvironment() {
-        val app = getApplication<Application>()
         Global.terminalSession?.finishIfRunning()
+        newTerminalSession()
+        setupContainerEnvironment()
+    }
+
+    /** 新建终端会话并注册 signal 9 回调（会话被杀时跳转 Signal9Activity） */
+    private fun newTerminalSession() {
         Global.newSession(onFinished = { exitCode ->
             if (exitCode == -9) {
                 Global.onSessionSignal9?.invoke()
@@ -190,6 +234,11 @@ class ContainerMainViewModel(
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             getApplication<Application>().startActivity(intent)
         }
+    }
+
+    /** 在当前会话中导出容器相关环境变量与 proot 软链接 */
+    private fun setupContainerEnvironment() {
+        val app = getApplication<Application>()
         Global.setupEnvironment()
         val containerDir = "${app.dataDir.absolutePath}/$code"
         Global.sendCommand("export CONTAINER_DIR=$containerDir")
@@ -297,7 +346,12 @@ class ContainerMainViewModel(
                     val adaptToScreenSize = feature["adapt_to_screen_size"] as? Boolean ?: continue
                     val scaleRatio = (feature["scale_ratio"] as? Number)?.toDouble() ?: continue
                     val useUnixSocket = feature["use_unix_socket"] as? Boolean ?: true
-                    Global.sendCommand(command)
+                    // 开关关闭时把服务端命令适配为监听 TCP 端口，否则服务端
+                    // 仍只监听 Unix 套接字，下方等待的 TCP 端口永远无法就绪
+                    Global.sendCommand(
+                        if (useUnixSocket) command
+                        else adaptVncCommandForTcp(command, extractPort(link))
+                    )
                     if (useUnixSocket) {
                         if (!waitForFile("${getApplication<Application>().filesDir}/tmp/.tiny.vnc")) {
                             continue
@@ -552,6 +606,27 @@ class ContainerMainViewModel(
     private fun extractPort(link: String): Int? {
         val portRegex = Regex(":(\\d+)(?:/|$)")
         return portRegex.find(link)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    /**
+     * 将 VNC 服务端启动命令适配为监听 TCP 端口的模式。
+     *
+     * 镜像自带的示例命令（如 Xtigervnc）通常写作
+     * "-rfbport -1 -rfbunixpath /tmp/.tiny.vnc"，即仅监听 Unix 套接字；
+     * 此时「从 Unix 套接字接收 VNC」开关关闭后，App 侧等待并连接的是
+     * link 中声明的 TCP 端口（如 vnc://127.0.0.1:5906），服务端却不会
+     * 在该端口上监听，开关形同虚设。
+     *
+     * 这里在发送前把 -rfbport 的值（含 -1）替换为 link 中的端口，
+     * 并移除 -rfbunixpath，使服务端改为监听 TCP 端口；
+     * 对不含这些参数的命令（如 tmoe 的 startvnc）原样返回。
+     * 仅在运行时生效，不修改保存在配置中的命令原文。
+     */
+    private fun adaptVncCommandForTcp(command: String, port: Int?): String {
+        if (port == null) return command
+        return command
+            .replace(Regex("""-rfbport[ =]-?\d+\b"""), "-rfbport $port")
+            .replace(Regex("""-rfbunixpath[ =]\S+"""), "")
     }
 
     private suspend fun waitForPort(port: Int, timeoutMs: Long = 15_000): Boolean {
